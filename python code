@@ -1,0 +1,67 @@
+src/analysis.py
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+import statsmodels.api as sm
+
+
+def load_data(path):
+    """Load the observational dataset."""
+    return pd.read_csv(path)
+
+
+def estimate_propensity_scores(data, treatment, covariates):
+    """Estimate each observation's probability of receiving treatment."""
+    X = data[covariates].copy()
+    y = data[treatment]
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X, y)
+
+    return model.predict_proba(X)[:, 1]
+
+
+def estimate_ate(data, treatment, outcome, covariates):
+    """
+    Estimate the average treatment effect using inverse probability weighting.
+    """
+    df = data.copy()
+
+    df["propensity_score"] = estimate_propensity_scores(
+        df, treatment, covariates
+    )
+
+    # Prevent extreme weights from causing numerical instability.
+    df["propensity_score"] = df["propensity_score"].clip(0.01, 0.99)
+
+    treated = df[treatment] == 1
+
+    treated_weight = df.loc[treated, outcome] / df.loc[
+        treated, "propensity_score"
+    ]
+
+    control_weight = df.loc[~treated, outcome] / (
+        1 - df.loc[~treated, "propensity_score"]
+    )
+
+    treated_mean = treated_weight.sum() / (
+        1 / df.loc[treated, "propensity_score"]
+    ).sum()
+
+    control_mean = control_weight.sum() / (
+        1 / (1 - df.loc[~treated, "propensity_score"])
+    ).sum()
+
+    return treated_mean - control_mean
+
+
+def main():
+    print("Causal inference analysis")
+    print("Load a dataset and call estimate_ate() with:")
+    print("  - treatment column")
+    print("  - outcome column")
+    print("  - pre-treatment covariates")
+
+
+if __name__ == "__main__":
+    main()
