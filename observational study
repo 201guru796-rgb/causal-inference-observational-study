@@ -1,0 +1,224 @@
+from pathlib import Path
+
+# Project structure
+files = {
+    "README.md": """# Causal Inference Observational Study
+
+## Task
+Estimate the causal effect of a treatment using observational data while
+accounting for confounding, treatment-selection bias, missing data, and
+treatment-effect heterogeneity.
+
+## Objective
+The analysis should:
+1. Define the treatment and outcome.
+2. Identify relevant pre-treatment confounders.
+3. Check treatment-group overlap and covariate balance.
+4. Estimate the Average Treatment Effect (ATE).
+5. Provide uncertainty estimates.
+6. Perform robustness/sensitivity checks.
+7. Clearly distinguish causal conclusions from associations.
+
+## Method
+The reference approach uses propensity-score modeling combined with
+outcome adjustment. A doubly robust estimator is preferred because it
+provides protection against misspecification of either the treatment or
+outcome model, assuming the required causal assumptions hold.
+
+## Requirements
+Python 3.10+
+""",
+
+    "requirements.txt": """numpy
+pandas
+scipy
+scikit-learn
+statsmodels
+pytest
+""",
+
+    "src/__init__.py": "",
+
+    "src/analysis.py": '''import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+
+def estimate_ate(df, treatment, outcome, covariates):
+    """
+    Estimate the Average Treatment Effect using a doubly robust estimator.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Observational dataset.
+    treatment : str
+        Binary treatment column.
+    outcome : str
+        Continuous outcome column.
+    covariates : list[str]
+        Pre-treatment confounders.
+
+    Returns
+    -------
+    float
+        Estimated Average Treatment Effect.
+    """
+
+    data = df[[treatment, outcome] + covariates].dropna().copy()
+
+    if data.empty:
+        raise ValueError("No complete observations remain after removing missing data.")
+
+    if set(data[treatment].unique()) != {0, 1}:
+        raise ValueError("Treatment must be binary and encoded as 0 and 1.")
+
+    X = data[covariates]
+    A = data[treatment].astype(int).to_numpy()
+    Y = data[outcome].astype(float).to_numpy()
+
+    # Propensity-score model
+    propensity_model = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=2000)
+    )
+
+    propensity_model.fit(X, A)
+    e = propensity_model.predict_proba(X)[:, 1]
+
+    # Prevent extreme inverse-probability weights.
+    e = np.clip(e, 0.01, 0.99)
+
+    # Outcome models
+    treated = A == 1
+    control = A == 0
+
+    outcome_treated = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=2000)
+    ) if False else None
+
+    # Use linear regression for continuous outcomes.
+    from sklearn.linear_model import LinearRegression
+
+    model_treated = make_pipeline(
+        StandardScaler(),
+        LinearRegression()
+    )
+    model_control = make_pipeline(
+        StandardScaler(),
+        LinearRegression()
+    )
+
+    model_treated.fit(X[treated], Y[treated])
+    model_control.fit(X[control], Y[control])
+
+    mu1 = model_treated.predict(X)
+    mu0 = model_control.predict(X)
+
+    # Doubly robust estimator
+    dr_treated = mu1 + (A * (Y - mu1) / e)
+    dr_control = mu0 + ((1 - A) * (Y - mu0) / (1 - e))
+
+    ate = np.mean(dr_treated - dr_control)
+
+    return float(ate)
+
+
+def validate_data(df, treatment, outcome, covariates):
+    """Basic validation checks for the analysis dataset."""
+
+    required = [treatment, outcome] + covariates
+    missing_columns = [c for c in required if c not in df.columns]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {missing_columns}"
+        )
+
+    if df[treatment].isna().all():
+        raise ValueError("Treatment contains no usable observations.")
+
+    if df[outcome].isna().all():
+        raise ValueError("Outcome contains no usable observations.")
+
+    return True
+
+
+if __name__ == "__main__":
+    # Example dataset so the repository can be tested immediately.
+    rng = np.random.default_rng(42)
+
+    n = 1000
+
+    age = rng.normal(45, 10, n)
+    income = rng.normal(60000, 15000, n)
+
+    probability = 1 / (
+        1 + np.exp(
+            -(0.03 * (age - 45) + (income - 60000) / 50000)
+        )
+    )
+
+    treatment = rng.binomial(1, probability)
+
+    outcome = (
+        10
+        + 2 * treatment
+        + 0.10 * age
+        + 0.00002 * income
+        + rng.normal(0, 2, n)
+    )
+
+    df = pd.DataFrame({
+        "age": age,
+        "income": income,
+        "treatment": treatment,
+        "outcome": outcome,
+    })
+
+    covariates = ["age", "income"]
+
+    validate_data(
+        df,
+        treatment="treatment",
+        outcome="outcome",
+        covariates=covariates,
+    )
+
+    ate = estimate_ate(
+        df,
+        treatment="treatment",
+        outcome="outcome",
+        covariates=covariates,
+    )
+
+    print(f"Estimated ATE: {ate:.4f}")
+''',
+
+    "tests/test_analysis.py": '''import numpy as np
+import pandas as pd
+
+from src.analysis import estimate_ate, validate_data
+
+
+def make_data(n=1000):
+    rng = np.random.default_rng(123)
+
+    age = rng.normal(45, 10, n)
+    income = rng.normal(60000, 15000, n)
+
+    p = 1 / (
+        1 + np.exp(
+            -(0.03 * (age - 45) + (income - 60000) / 50000)
+        )
+    )
+
+    treatment = rng.binomial(1, p)
+
+    # True treatment effect is approximately 5.
+    outcome = (
+        10
+        + 5
