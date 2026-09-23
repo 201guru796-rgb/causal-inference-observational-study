@@ -1,0 +1,55 @@
+tests/test_analysis.py
+import pandas as pd
+import numpy as np
+
+from src.analysis import estimate_propensity_scores, estimate_ate
+
+
+def make_test_data():
+    return pd.DataFrame({
+        "age": [25, 30, 35, 40, 45, 50, 55, 60],
+        "income": [30, 35, 40, 45, 50, 55, 60, 65],
+        "treatment": [0, 0, 0, 1, 1, 1, 1, 0],
+        "outcome": [10, 12, 14, 24, 26, 28, 30, 16],
+    })
+
+
+def test_propensity_scores():
+    data = make_test_data()
+
+    scores = estimate_propensity_scores(
+        data,
+        "treatment",
+        ["age", "income"],
+    )
+
+    assert len(scores) == len(data)
+    assert np.all(scores >= 0)
+    assert np.all(scores <= 1)
+
+
+def test_ate_returns_number():
+    data = make_test_data()
+
+    ate = estimate_ate(
+        data,
+        "treatment",
+        "outcome",
+        ["age", "income"],
+    )
+
+    assert isinstance(ate, (float, np.floating))
+    assert np.isfinite(ate)
+
+
+def test_treatment_effect_is_positive():
+    data = make_test_data()
+
+    ate = estimate_ate(
+        data,
+        "treatment",
+        "outcome",
+        ["age", "income"],
+    )
+
+    assert ate > 0
